@@ -64,15 +64,6 @@ async function init() {
                 return;
             }
 
-            // Ensure we have common member data cached
-            if (SHOULD_PUNISH && !message.member && message.guild) {
-                try {
-                    await message.guild.members.fetch(message.author.id);
-                } catch (err) {
-                    if (DEBUG) console.error(`[DEBUG] Failed to fetch member ${message.author.id}`);
-                }
-            }
-
             if (IS_WHITELIST) {
                 if (!ALLOWED_CHANNELS.includes(message.channel.id)) {
                     if (DEBUG) console.log(`[DEBUG] Skipping message ${message.id} - channel not in whitelist`);
@@ -82,6 +73,21 @@ async function init() {
                 if (DISALLOWED_CHANNELS.includes(message.channel.id)) {
                     if (DEBUG) console.log(`[DEBUG] Skipping message ${message.id} - channel in blacklist`);
                     return;
+                }
+            }
+
+            // Only trigger OCR if there's actually something to scan
+            if (message.attachments.size === 0 && !MessageAnalyzer.URL_REGEX.test(message.content)) {
+                return;
+            }
+            MessageAnalyzer.URL_REGEX.lastIndex = 0; // Reset regex state
+
+            // Now that we know OCR might be needed, ensure we have member data for moderation/punishment
+            if (!message.member && message.guild) {
+                try {
+                    await message.guild.members.fetch(message.author.id);
+                } catch (err) {
+                    if (DEBUG) console.error(`[DEBUG] Failed to fetch member ${message.author.id}`);
                 }
             }
 
@@ -96,12 +102,6 @@ async function init() {
                     return;
                 }
             }
-
-            // Only trigger OCR if there's actually something to scan
-            if (message.attachments.size === 0 && !MessageAnalyzer.URL_REGEX.test(message.content)) {
-                return;
-            }
-            MessageAnalyzer.URL_REGEX.lastIndex = 0; // Reset regex state
 
             if (DEBUG) console.log(`[DEBUG] Analyzing message ${message.id} from ${message.author.tag}`);
             console.time(`Analyzing message ${message.id}`);
