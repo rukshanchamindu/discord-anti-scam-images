@@ -1,0 +1,21 @@
+{
+  "name": "discord-anti-scam-images",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --watch ./src/index.ts",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.2.3",
+    "ms": "^2.1.3",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/ms": "^2.1.0",
+    "@types/node": "^25.0.6",
+    "typescript": "^5.9.3"
+  }
+}

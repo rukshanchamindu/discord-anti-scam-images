@@ -1,0 +1,30 @@
+{
+  "include": ["./src"],
+  "compilerOptions": {
+      
+    /* Visit https://aka.ms/tsconfig to read more about this file */
+    "target": "es2024", 
+    "lib": ["ES2024"],
+    "module": "nodenext", 
+    "rootDir": "src", 
+    "moduleResolution": "node16",
+    "rewriteRelativeImportExtensions": true,
+    "baseUrl": ".",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "sourceMap": true,
+    "outDir": "build",
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "forceConsistentCasingInFileNames": true, 
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictPropertyInitialization": false,
+    "noImplicitThis": true,
+    "noFallthroughCasesInSwitch": false,
+    "skipLibCheck": true
+  }
+}
