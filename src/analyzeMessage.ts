@@ -24,6 +24,9 @@ export class MessageAnalyzer {
         const geminiKey = process.env.GEMINI_API_KEY;
         if (geminiKey) {
             this.gemini = new GeminiEngine(geminiKey, "gemini-2.5-flash-lite");
+            console.log("[INIT] Gemini OCR engine initialized (Model: gemini-2.5-flash-lite)");
+        } else if (this.debug) {
+            console.log("[DEBUG] Gemini API key not found, fallback disabled.");
         }
     }
 
@@ -69,15 +72,15 @@ export class MessageAnalyzer {
     }
 
     private async scanWithEngine(engine: TesseractEngine | GeminiEngine, url: string): Promise<ScanResult> {
-        const cacheKey = url.split('?')[0];
+        const urlPart = url.split('?')[0];
+        // Cache key includes engine name so Tesseract "clean" result doesn't block Gemini scan
+        const cacheKey = `${engine.name}:${urlPart}`;
 
         // Cache Check
         if (this.cache.has(cacheKey)) {
             const cached = this.cache.get(cacheKey)!;
-            if (cached.foundWords) return cached;
-            // If it was cached as "clean" by Tesseract, we might still want to try Gemini if it's the 4-image case, 
-            // but for simplicity we'll check engine name or just re-scan if fallback.
-            // Actually, let's keep it simple: if Tesseract says clean, it's clean for Tesseract.
+            if (this.debug) console.log(`[DEBUG] Cache hit for ${cacheKey}: ${cached.foundWords}`);
+            return cached;
         }
 
         try {
