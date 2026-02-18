@@ -1,145 +1,109 @@
 import type { Message } from "discord.js";
-import { createWorker } from "tesseract.js";
+import { TesseractEngine } from "./engines/TesseractEngine.ts";
+import { GeminiEngine } from "./engines/GeminiEngine.ts";
+import { MediaExtractor } from "./utils/MediaExtractor.ts";
+
+export interface ScanResult {
+    foundWords: boolean;
+    bannedWords?: { url: string, word: string }[];
+}
 
 export class MessageAnalyzer {
-    // "The requested module 'tesseract.js' does not provide an export named 'Worker'"
-    private ocrWorker: Awaited<ReturnType<typeof createWorker>> | null;
-    public bannedWords: string[];
-    public debug: boolean;
-    public static URL_REGEX = /(https?:\/\/[^\s]+)/g;
-    private static IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.gif'];
-    private cache: Map<string, { foundWords: boolean, bannedWords?: { url: string, word: string }[] }>;
+    private tesseract: TesseractEngine;
+    private gemini: GeminiEngine | null = null;
+    private bannedWords: string[];
+    private debug: boolean;
+    private cache: Map<string, ScanResult>;
 
     constructor(bannedWords?: string[], debug: boolean = false) {
         this.bannedWords = bannedWords || [];
         this.debug = debug;
         this.cache = new Map();
-    }
+        this.tesseract = new TesseractEngine();
 
-    public async destroyWorker() {
-        if (!this.ocrWorker) {
-            return;
+        const geminiKey = process.env.GEMINI_API_KEY;
+        if (geminiKey) {
+            this.gemini = new GeminiEngine(geminiKey, "gemini-2.5-flash-lite");
         }
-        await this.ocrWorker.terminate();
-        this.ocrWorker = null;
-        this.cache.clear();
     }
 
     public async initializeWorker() {
-        this.ocrWorker = await createWorker("eng");
+        await this.tesseract.initialize();
     }
 
-    public async analyzeMessage(message: Message): Promise<{ foundWords: false } | { foundWords: true, bannedWords: { url: string, word: string }[] }> {
-        if (!this.ocrWorker) {
-            throw new Error("OCR worker not initialized");
-        }
-        let attachmentUrls: string[] = [];
+    public async destroyWorker() {
+        await this.tesseract.destroy();
+        this.cache.clear();
+    }
 
-        let urlMatches = message.content.matchAll(MessageAnalyzer.URL_REGEX);
-        let checkUrlPromises: Promise<void>[] = [];
-        for (let url of urlMatches) {
-            if (url[0]) {
-                try {
-                    let parsedUrl = new URL(url[0]);
-
-                    // Optimization: check extension first before fetching
-                    const hasImageExt = MessageAnalyzer.IMAGE_EXTENSIONS.some(ext => parsedUrl.pathname.toLowerCase().endsWith(ext));
-
-                    if (hasImageExt) {
-                        attachmentUrls.push(parsedUrl.href);
-                        continue;
-                    }
-
-                    // Use HEAD request to check content-type without downloading body
-                    checkUrlPromises.push(fetch(parsedUrl.href, { method: "HEAD" })
-                        .then(fetchResult => {
-                            if (fetchResult.ok && fetchResult.headers.get("content-type")?.startsWith("image/")) {
-                                if (this.debug) console.log(`[DEBUG] Found Image URL in content (via HEAD): ${parsedUrl.href}`);
-                                attachmentUrls.push(parsedUrl.href);
-                            }
-                        })
-                        .catch(err => {
-                            if (this.debug) console.error(`[DEBUG] HEAD request failed for ${parsedUrl.href}: ${err.message}`);
-                        })
-                    );
-                } catch (error) {
-                    if (this.debug) console.error(`[DEBUG] Failed to parse URL ${url[0]}`);
-                    continue;
-                }
-            }
-        }
-
-        if (message.attachments.size > 0) {
-            message.attachments.forEach(attachment => {
-                if (attachment.contentType?.startsWith('image/')) {
-                    console.log(`Found Attachment URL: ${attachment.url}`);
-                    attachmentUrls.push(attachment.url);
-                }
-            });
-        } else {
-            console.log(`No attachments found in message ${message.id}`);
-        }
-        await Promise.all(checkUrlPromises);
+    public async analyzeMessage(message: Message): Promise<ScanResult> {
+        const attachmentUrls = await MediaExtractor.extractImageUrls(message, this.debug);
 
         if (attachmentUrls.length === 0) {
             return { foundWords: false };
         }
 
-        let bannedWords: { url: string, word: string }[] = [];
-
-        for (const attachment of attachmentUrls) {
-            // Optimization: Cache results by base URL (ignoring Discord's expiring query params)
-            const cacheKey = attachment.split('?')[0];
-            if (this.cache.has(cacheKey)) {
-                const cached = this.cache.get(cacheKey)!;
-                if (this.debug) console.log(`[DEBUG] Cache hit for ${cacheKey}: ${cached.foundWords}`);
-                if (cached.foundWords) {
-                    return { foundWords: true, bannedWords: cached.bannedWords! };
-                }
-                continue;
-            }
-
-            if (!this.ocrWorker) throw new Error("OCR worker not initialized");
-
-            try {
-                const ocr = await this.ocrWorker.recognize(attachment);
-                const rawText = ocr.data.text.toLowerCase();
-
-                if (this.debug) {
-                    console.log(`[DEBUG] OCR Results for ${attachment}:`);
-                    console.log(`[DEBUG] Confidence: ${ocr.data.confidence}%`);
-                    console.log(`[DEBUG] Raw Text:\n${ocr.data.text}`);
-                }
-
-                let foundInThisImage = false;
-                let currentBannedWords: { url: string, word: string }[] = [];
-
-                for (let word of this.bannedWords) {
-                    if (rawText.includes(word.toLowerCase())) {
-                        if (this.debug) console.log(`[DEBUG] Match found: "${word}" in ${attachment}`);
-                        currentBannedWords.push({ url: attachment, word });
-                        foundInThisImage = true;
-                    }
-                }
-
-                // Update global results and cache
-                if (this.cache.size > 1000) this.cache.clear();
-                this.cache.set(cacheKey, {
-                    foundWords: foundInThisImage,
-                    bannedWords: foundInThisImage ? currentBannedWords : undefined
-                });
-
-                if (foundInThisImage) {
-                    if (this.debug) console.log(`[DEBUG] Early exit: Scam detected in ${attachment}`);
-                    console.log(`Banned words found in message ${message.id}: ${currentBannedWords.map(bw => bw.word).join(", ")}`);
-                    return { foundWords: true, bannedWords: currentBannedWords };
-                }
-            } catch (err) {
-                console.error(`Failed to recognize image ${attachment}: ${err}`);
+        // 1. Basic OCR (Tesseract) - Loop all images
+        for (const url of attachmentUrls) {
+            const result = await this.scanWithEngine(this.tesseract, url);
+            if (result.foundWords) {
+                console.log(`[Tesseract] Banned words found in message ${message.id}`);
+                return result;
             }
         }
 
-        console.log(`No banned words found in message ${message.id}`);
+        // 2. Gemini Fallback - Only if 4 images detected and basic OCR failed
+        if (attachmentUrls.length === 4 && this.gemini) {
+            const firstImage = attachmentUrls[0];
+            if (this.debug) console.log(`[DEBUG] [FALLBACK] Using Gemini for first image: ${firstImage}`);
+
+            const result = await this.scanWithEngine(this.gemini, firstImage);
+            if (result.foundWords) {
+                console.log(`[GEMINI FALLBACK] Banned words found in message ${message.id}`);
+                return result;
+            }
+        }
+
+        if (this.debug) console.log(`[DEBUG] No banned words found in message ${message.id}`);
         return { foundWords: false };
+    }
+
+    private async scanWithEngine(engine: TesseractEngine | GeminiEngine, url: string): Promise<ScanResult> {
+        const cacheKey = url.split('?')[0];
+
+        // Cache Check
+        if (this.cache.has(cacheKey)) {
+            const cached = this.cache.get(cacheKey)!;
+            if (cached.foundWords) return cached;
+            // If it was cached as "clean" by Tesseract, we might still want to try Gemini if it's the 4-image case, 
+            // but for simplicity we'll check engine name or just re-scan if fallback.
+            // Actually, let's keep it simple: if Tesseract says clean, it's clean for Tesseract.
+        }
+
+        try {
+            const ocr = await engine.recognize(url);
+            const rawText = ocr.text.toLowerCase();
+
+            let foundWords: { url: string, word: string }[] = [];
+            for (let word of this.bannedWords) {
+                if (rawText.includes(word.toLowerCase())) {
+                    foundWords.push({ url, word });
+                }
+            }
+
+            const scanResult = {
+                foundWords: foundWords.length > 0,
+                bannedWords: foundWords.length > 0 ? foundWords : undefined
+            };
+
+            // Only cache if clean or if we found something (we want to avoid re-running expensive Gemini if possible)
+            if (this.cache.size > 1000) this.cache.clear();
+            this.cache.set(cacheKey, scanResult);
+
+            return scanResult;
+        } catch (err) {
+            console.error(`[${engine.name}] Scan failed for ${url}:`, err);
+            return { foundWords: false };
+        }
     }
 }
