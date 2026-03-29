@@ -1,6 +1,7 @@
 import type { Message } from "discord.js";
 import { TesseractEngine } from "./engines/TesseractEngine.ts";
 import { GeminiEngine } from "./engines/GeminiEngine.ts";
+import { OcrSpaceEngine } from "./engines/OcrSpaceEngine.ts";
 import { MediaExtractor } from "./utils/MediaExtractor.ts";
 
 export interface ScanResult {
@@ -10,6 +11,7 @@ export interface ScanResult {
 
 export class MessageAnalyzer {
     private tesseract: TesseractEngine;
+    private ocrSpace: OcrSpaceEngine | null = null;
     private gemini: GeminiEngine | null = null;
     private bannedWords: string[];
     private debug: boolean;
@@ -27,6 +29,14 @@ export class MessageAnalyzer {
             console.log("[INIT] Gemini OCR engine initialized (Model: gemini-2.5-flash-lite)");
         } else if (this.debug) {
             console.log("[DEBUG] Gemini API key not found, fallback disabled.");
+        }
+
+        const ocrSpaceKey = process.env.OCR_SPACE_API_KEY;
+        if (ocrSpaceKey) {
+            this.ocrSpace = new OcrSpaceEngine(ocrSpaceKey);
+            console.log("[INIT] OcrSpace OCR engine initialized (Fallback enabled)");
+        } else if (this.debug) {
+            console.log("[DEBUG] OCR_SPACE_API_KEY not found, OcrSpace fallback disabled.");
         }
     }
 
@@ -53,6 +63,16 @@ export class MessageAnalyzer {
                 console.log(`[Tesseract] Banned words found in message ${message.id}`);
                 return result;
             }
+
+            // 1b. OcrSpace Fallback for individual image if Tesseract fails
+            if (this.ocrSpace) {
+                if (this.debug) console.log(`[DEBUG] [FALLBACK] Using OcrSpace for image: ${url}`);
+                const ocrResult = await this.scanWithEngine(this.ocrSpace, url);
+                if (ocrResult.foundWords) {
+                    console.log(`[OcrSpace Fallback] Banned words found in message ${message.id}`);
+                    return ocrResult;
+                }
+            }
         }
 
         // 2. Gemini Fallback - Only if 4 images detected and basic OCR failed
@@ -71,7 +91,7 @@ export class MessageAnalyzer {
         return { foundWords: false };
     }
 
-    private async scanWithEngine(engine: TesseractEngine | GeminiEngine, url: string): Promise<ScanResult> {
+    private async scanWithEngine(engine: TesseractEngine | GeminiEngine | OcrSpaceEngine, url: string): Promise<ScanResult> {
         const urlPart = url.split('?')[0];
         // Cache key includes engine name so Tesseract "clean" result doesn't block Gemini scan
         const cacheKey = `${engine.name}:${urlPart}`;
