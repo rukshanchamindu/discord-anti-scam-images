@@ -1,7 +1,5 @@
 import { Client, Message, EmbedBuilder, Colors } from "discord.js";
 import type { Snowflake } from "discord.js";
-import ms from "ms";
-import type { StringValue } from "ms";
 import { MessageAnalyzer } from "../analyzeMessage.ts";
 import { MediaExtractor } from "../utils/MediaExtractor.ts";
 

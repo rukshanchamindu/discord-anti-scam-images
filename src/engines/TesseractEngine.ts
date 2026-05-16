@@ -9,9 +9,12 @@ export class TesseractEngine implements IOcrEngine {
         this.worker = await createWorker("eng");
     }
 
-    async recognize(imageUrl: string): Promise<OcrResult> {
+    async recognize(imageUrl: string | string[]): Promise<OcrResult> {
         if (!this.worker) throw new Error("Tesseract worker not initialized");
-        const result = await this.worker.recognize(imageUrl);
+        const url = Array.isArray(imageUrl) ? imageUrl[0] : imageUrl;
+        if (!url) return { text: "" };
+
+        const result = await this.worker.recognize(url);
         return {
             text: result.data.text,
             confidence: result.data.confidence

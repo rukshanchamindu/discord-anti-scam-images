@@ -11,27 +11,34 @@ export class GeminiEngine implements IOcrEngine {
         this.modelName = modelName;
     }
 
-    async recognize(imageUrl: string): Promise<OcrResult> {
+    async recognize(imageUrl: string | string[]): Promise<OcrResult> {
         if (!this.genAI) throw new Error("Gemini API not initialized");
 
         const model = this.genAI.getGenerativeModel({ model: this.modelName });
+        const urls = Array.isArray(imageUrl) ? imageUrl : [imageUrl];
+        const contentParts: any[] = [];
 
-        const response = await fetch(imageUrl);
-        if (!response.ok) throw new Error(`Failed to fetch image: ${response.statusText}`);
+        // Fetch all images and convert to base64 parts
+        for (const url of urls) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Failed to fetch image: ${response.statusText}`);
 
-        const buffer = await response.arrayBuffer();
-        const base64Data = Buffer.from(buffer).toString("base64");
-        const mimeType = response.headers.get("content-type") || "image/png";
+            const buffer = await response.arrayBuffer();
+            const base64Data = Buffer.from(buffer).toString("base64");
+            const mimeType = response.headers.get("content-type") || "image/png";
 
-        const result = await model.generateContent([
-            {
+            contentParts.push({
                 inlineData: {
                     data: base64Data,
                     mimeType: mimeType
                 }
-            },
-            "Extract all text from this image. Only return the text found in the image, nothing else."
-        ]);
+            });
+        }
+
+        // Add the prompt at the end
+        contentParts.push("Extract all text from these images. Only return the text found in the images, nothing else.");
+
+        const result = await model.generateContent(contentParts);
 
         return {
             text: result.response.text()

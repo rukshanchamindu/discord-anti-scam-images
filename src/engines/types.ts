@@ -6,6 +6,6 @@ export interface OcrResult {
 export interface IOcrEngine {
     name: string;
     initialize?(): Promise<void>;
-    recognize(imageUrl: string): Promise<OcrResult>;
+    recognize(imageUrl: string | string[]): Promise<OcrResult>;
     destroy?(): Promise<void>;
 }

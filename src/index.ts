@@ -6,12 +6,30 @@ import { SpamManager } from "./services/SpamManager.ts";
 import 'dotenv/config';
 
 async function init() {
-    const DISCORD_TOKEN = process.env.DISCORD_TOKEN || "";
-    const ALLOWED_CHANNELS = process.env.ALLOWED_CHANNELS?.split(",") || [];
-    const DISALLOWED_CHANNELS = process.env.DISALLOWED_CHANNELS?.split(",") || [];
-    const IS_WHITELIST = process.env.IS_WHITELIST === "true";
+    // Get bot configs strictly from BOTS (JSON)
+    if (!process.env.BOTS) {
+        throw new Error("Missing BOTS environment variable. Please provide a JSON array of bot configurations.");
+    }
+
+    let botConfigs: { 
+        token: string, 
+        logChannel?: string, 
+        enabled?: boolean,
+        allowedChannels?: string[],
+        disallowedChannels?: string[],
+        isWhitelist?: boolean
+    }[] = [];
+
+    try {
+        botConfigs = JSON.parse(process.env.BOTS);
+    } catch (err) {
+        throw new Error(`Failed to parse BOTS environment variable as JSON: ${err}`);
+    }
+
+    // Filter for enabled bots only
+    const activeConfigs = botConfigs.filter(b => b.enabled !== false && b.token);
+
     const BANNED_WORDS = process.env.BANNED_WORDS?.split(",") || ["crypto casino", "special promo code"];
-    const LOG_CHANNEL = process.env.LOG_CHANNEL || "";
     const SHOULD_DELETE = process.env.SHOULD_DELETE !== "false";
     const SHOULD_PUNISH = process.env.SHOULD_PUNISH !== "false";
     const TIMEOUT_DURATION = ms((process.env.TIMEOUT_DURATION || "7d") as StringValue);
@@ -20,52 +38,72 @@ async function init() {
     const MASS_ANALYZER_DELAY = parseInt(process.env.MASS_ANALYZER_DELAY || "2000");
     const DEBUG = process.env.DEBUG === "true";
 
-    const bot = new Client({
-        intents: [IntentsBitField.Flags.MessageContent, IntentsBitField.Flags.Guilds, IntentsBitField.Flags.GuildMessages]
-    });
+    if (activeConfigs.length === 0) {
+        throw new Error("No enabled bot configurations found.");
+    }
 
     const messageAnalyzer = new MessageAnalyzer(BANNED_WORDS, DEBUG);
-    const spamManager = new SpamManager(bot, messageAnalyzer, {
-        debug: DEBUG,
-        shouldDelete: SHOULD_DELETE,
-        shouldPunish: SHOULD_PUNISH,
-        timeoutDuration: TIMEOUT_DURATION,
-        triggersBeforeAction: TRIGGERS_BEFORE_ACTION,
-        massAnalyzerDelay: MASS_ANALYZER_DELAY,
-        logChannelId: LOG_CHANNEL
-    });
-
     await messageAnalyzer.initializeWorker();
 
-    bot.on("clientReady", () => {
-        console.log(`Logged in as ${bot.user?.tag}!`);
-    });
+    const clients: Client[] = [];
 
-    bot.on("messageCreate", async (message) => {
-        if (message.author.id === bot.user?.id) return;
+    for (const config of activeConfigs) {
+        // Use bot-specific config or default to empty/false
+        const allowedChannels = config.allowedChannels || [];
+        const disallowedChannels = config.disallowedChannels || [];
+        const isWhitelist = config.isWhitelist || false;
 
-        // Channel filters
-        if (IS_WHITELIST) {
-            if (!ALLOWED_CHANNELS.includes(message.channel.id)) return;
-        } else if (DISALLOWED_CHANNELS.includes(message.channel.id)) {
-            return;
+        const bot = new Client({
+            intents: [IntentsBitField.Flags.MessageContent, IntentsBitField.Flags.Guilds, IntentsBitField.Flags.GuildMessages]
+        });
+
+        const spamManager = new SpamManager(bot, messageAnalyzer, {
+            debug: DEBUG,
+            shouldDelete: SHOULD_DELETE,
+            shouldPunish: SHOULD_PUNISH,
+            timeoutDuration: TIMEOUT_DURATION,
+            triggersBeforeAction: TRIGGERS_BEFORE_ACTION,
+            massAnalyzerDelay: MASS_ANALYZER_DELAY,
+            logChannelId: config.logChannel || ""
+        });
+
+        bot.on("clientReady", () => {
+            console.log(`[Bot Ready] Logged in as ${bot.user?.tag}!`);
+        });
+
+        bot.on("messageCreate", async (message) => {
+            if (message.author.id === bot.user?.id) return;
+
+            // Channel filters (using bot-specific or merged config)
+            if (isWhitelist) {
+                if (!allowedChannels.includes(message.channel.id)) return;
+            } else if (disallowedChannels.includes(message.channel.id)) {
+                return;
+            }
+
+            // Permissions/Bot filters
+            if (!SCAN_EVERYTHING) {
+                if (message.author.bot) return;
+                if (message.member && !message.member.moderatable) return;
+            }
+
+            await spamManager.handleMessage(message);
+        });
+
+        try {
+            await bot.login(config.token);
+            clients.push(bot);
+        } catch (err) {
+            console.error(`[Error] Failed to login bot with token starting with ${config.token.substring(0, 10)}... :`, err);
         }
-
-        // Permissions/Bot filters
-        if (!SCAN_EVERYTHING) {
-            if (message.author.bot) return;
-            if (message.member && !message.member.moderatable) return;
-        }
-
-        await spamManager.handleMessage(message);
-    });
-
-    bot.login(DISCORD_TOKEN);
+    }
 
     return {
         stop: async () => {
             await messageAnalyzer.destroyWorker();
-            bot.destroy();
+            for (const bot of clients) {
+                bot.destroy();
+            }
             process.exit(0);
         }
     }

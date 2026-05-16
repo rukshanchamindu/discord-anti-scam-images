@@ -11,11 +11,14 @@ export class OcrSpaceEngine implements IOcrEngine {
         this.apiKey = apiKey;
     }
 
-    async recognize(imageUrl: string): Promise<OcrResult> {
+    async recognize(imageUrl: string | string[]): Promise<OcrResult> {
         if (!this.apiKey) throw new Error("OCR Space API Key not provided");
 
+        const url = Array.isArray(imageUrl) ? imageUrl[0] : imageUrl;
+        if (!url) return { text: "" };
+
         // Fetch image
-        const response = await fetch(imageUrl);
+        const response = await fetch(url);
         if (!response.ok) throw new Error(`Failed to fetch image: ${response.statusText}`);
 
         let buffer: any = Buffer.from(await response.arrayBuffer());
